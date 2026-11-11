@@ -1,0 +1,673 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Market Flow</title>
+<script src="/static/d3.min.js"></script>
+<style>
+  :root {
+    --bg: #04070c; --panel: #0a1018; --grid: #13202c; --text: #cfe3ee; --dim: #5d7686;
+    --up: #2ee6a6; --up-dim: rgba(46,230,166,.18); --dn: #ff4d6d; --dn-dim: rgba(255,77,109,.18);
+    --mono: "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font-family: var(--mono); overflow: hidden; }
+  header { display: flex; align-items: center; gap: 18px; padding: 8px 16px; border-bottom: 1px solid var(--grid); height: 44px; }
+  header .title { font-weight: 700; letter-spacing: .12em; font-size: 13px; }
+  header .breadth b { font-size: 16px; }
+  header .up { color: var(--up); } header .dn { color: var(--dn); }
+  header .status { margin-left: auto; font-size: 11px; color: var(--dim); }
+  header .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--dim); margin-right: 6px; }
+  header .dot.live { background: var(--up); box-shadow: 0 0 8px var(--up); }
+  #sectors { display: flex; gap: 6px; padding: 6px 16px; height: 32px; overflow: hidden; border-bottom: 1px solid var(--grid); }
+  .chip { font-size: 10px; padding: 3px 8px; border-radius: 3px; border: 1px solid; white-space: nowrap; }
+  main { display: grid; grid-template-columns: 1fr 340px; height: calc(100% - 76px); }
+  #flow { width: 100%; height: 100%; overflow: hidden; }
+  #cards { border-left: 1px solid var(--grid); padding: 10px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
+  .card { border: 1px solid; border-radius: 6px; padding: 10px 12px; background: var(--panel); position: relative; }
+  .card.up { border-color: var(--up); box-shadow: inset 0 0 24px var(--up-dim); }
+  .card.dn { border-color: var(--dn); box-shadow: inset 0 0 24px var(--dn-dim); }
+  .card .row { display: flex; justify-content: space-between; align-items: center; }
+  .card .sym { font-weight: 700; font-size: 15px; letter-spacing: .05em; }
+  .card .sec { font-size: 9px; color: var(--dim); }
+  .badge { font-size: 9px; font-weight: 700; padding: 2px 6px; border-radius: 3px; color: #04070c; }
+  .score { width: 30px; height: 30px; border-radius: 50%; border: 2px solid; display: grid; place-items: center; font-size: 11px; font-weight: 700; }
+  .pct { font-size: 28px; font-weight: 700; margin: 4px 0 2px; }
+  .meta { font-size: 10px; color: var(--dim); line-height: 1.6; }
+  .meta span { color: var(--text); }
+  .card svg { width: 100%; height: 36px; display: block; margin-top: 4px; }
+  .label { font-size: 9px; letter-spacing: .15em; color: var(--dim); margin: 4px 2px 0; }
+  text { font-family: var(--mono); }
+  g.tile, .card { cursor: pointer; }
+  .mode { font-size: 10px; font-weight: 700; padding: 3px 8px; border-radius: 3px; letter-spacing: .1em; }
+  .mode.paper { background: #f5c451; color: #04070c; } .mode.live { background: var(--dn); color: #fff; animation: pulse 1.6s infinite; }
+  @keyframes pulse { 50% { opacity: .55; } }
+  .hbtn { font: inherit; font-size: 10px; background: transparent; color: var(--text); border: 1px solid var(--grid); padding: 3px 8px; border-radius: 3px; cursor: pointer; }
+  .hbtn.kill { border-color: var(--dn); color: var(--dn); } .hbtn.kill.on { background: var(--dn); color: #fff; }
+  #pnl { font-size: 12px; }
+  /* order drawer */
+  #drawer { position: fixed; top: 0; right: 0; width: 380px; max-width: 100%; height: 100%; background: #070c13; border-left: 1px solid var(--grid);
+            transform: translateX(100%); transition: transform .2s; z-index: 10; padding: 14px; overflow-y: auto; box-shadow: -10px 0 30px #000; }
+  #drawer.open { transform: none; }
+  @media (prefers-reduced-motion: reduce) { #drawer { transition: none; } }
+  #drawer h2 { margin: 0; font-size: 18px; letter-spacing: .05em; display: flex; justify-content: space-between; }
+  #drawer .x { background: none; border: 0; color: var(--dim); font-size: 20px; cursor: pointer; }
+  .seg { display: flex; gap: 6px; margin: 10px 0; }
+  .seg button { flex: 1; font: inherit; font-size: 12px; padding: 8px; border-radius: 4px; border: 1px solid var(--grid); background: var(--panel); color: var(--text); cursor: pointer; }
+  .seg button:disabled { opacity: .3; cursor: not-allowed; }
+  .seg button.on.b { background: var(--up); color: #04070c; border-color: var(--up); }
+  .seg button.on.s { background: var(--dn); color: #fff; border-color: var(--dn); }
+  .seg button.on.n { border-color: var(--text); }
+  .fld { display: flex; align-items: center; justify-content: space-between; margin: 8px 0; font-size: 12px; color: var(--dim); }
+  .fld input, .fld select { font: inherit; width: 150px; background: var(--panel); color: var(--text); border: 1px solid var(--grid); border-radius: 4px; padding: 6px 8px; text-align: right; }
+  .fld .step { display: flex; gap: 4px; } .fld .step input { width: 110px; }
+  .fld .step button { font: inherit; width: 26px; background: var(--panel); color: var(--text); border: 1px solid var(--grid); border-radius: 4px; cursor: pointer; }
+  .note { font-size: 10px; color: var(--dim); line-height: 1.6; margin: 6px 0; }
+  .msg { font-size: 11px; padding: 6px 8px; border-radius: 4px; margin: 4px 0; }
+  .msg.err { background: var(--dn-dim); color: #ffb3c0; } .msg.warn { background: rgba(245,196,81,.15); color: #f5c451; } .msg.ok { background: var(--up-dim); color: var(--up); }
+  .go { width: 100%; font: inherit; font-weight: 700; font-size: 13px; padding: 11px; border-radius: 5px; border: 0; cursor: pointer; margin-top: 8px; }
+  .go.review { background: var(--panel); color: var(--text); border: 1px solid var(--text); }
+  .go.b { background: var(--up); color: #04070c; } .go.s { background: var(--dn); color: #fff; }
+  table.ol { width: 100%; font-size: 10px; border-collapse: collapse; margin-top: 4px; }
+  table.ol td { padding: 3px 2px; border-bottom: 1px solid var(--grid); }
+  table.ol a { color: var(--dn); cursor: pointer; }
+  .econ { border: 1px solid var(--grid); border-radius: 6px; padding: 10px; margin: 10px 0 4px; background: var(--panel); }
+  .econ .big { font-size: 24px; font-weight: 700; margin: 2px 0; }
+  .econ .t { font-size: 9px; letter-spacing: .15em; color: var(--dim); }
+  .econ table { width: 100%; font-size: 10px; color: var(--dim); margin-top: 6px; border-collapse: collapse; }
+  .econ td:last-child { text-align: right; color: var(--text); }
+  .prod { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin: 10px 0; }
+  .prod button { font: inherit; text-align: left; padding: 8px 10px; border-radius: 5px; border: 1px solid var(--grid); background: var(--panel); color: var(--text); cursor: pointer; }
+  .prod button b { display: block; font-size: 12px; letter-spacing: .05em; }
+  .prod button span { font-size: 9px; color: var(--dim); }
+  .prod button.on { border-color: #7cc4ff; box-shadow: inset 0 0 14px rgba(124,196,255,.18); }
+  .range { position: relative; height: 6px; border-radius: 3px; background: linear-gradient(90deg, var(--dn-dim), var(--up-dim)); margin: 6px 0 2px; }
+  .range i { position: absolute; top: -3px; width: 3px; height: 12px; border-radius: 2px; background: #fff; box-shadow: 0 0 6px #fff; }
+  .range u { position: absolute; top: -2px; width: 1px; height: 10px; background: #f5c451; }
+  .rlbl { display: flex; justify-content: space-between; font-size: 9px; color: var(--dim); }
+  #sq { font-size: 10px; color: #f5c451; }
+  .tag { font-size: 8px; padding: 1px 4px; border-radius: 2px; border: 1px solid var(--grid); color: var(--dim); margin-left: 4px; }
+  #phase { font-size: 10px; padding: 3px 8px; border-radius: 3px; border: 1px solid var(--grid); cursor: help; }
+  #phase.PRIME { border-color: var(--up); color: var(--up); } #phase.OPENING, #phase.MIDDAY { border-color: #f5c451; color: #f5c451; }
+  #phase.LATE, #phase.SQUAREOFF, #phase.CLOSED { border-color: var(--dn); color: var(--dn); }
+  .sig { border: 1px solid var(--grid); border-left: 3px solid var(--up); border-radius: 5px; padding: 8px 10px; background: var(--panel); font-size: 10px; }
+  .sig.ext { border-left-color: #f5c451; opacity: .75; }
+  .sig .row b { font-size: 13px; letter-spacing: .04em; }
+  .sig .lv { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; margin: 6px 0; }
+  .sig .lv div { background: #070c13; border-radius: 3px; padding: 3px 5px; }
+  .sig .lv span { display: block; font-size: 8px; color: var(--dim); letter-spacing: .1em; }
+  .sig .why { color: var(--dim); line-height: 1.5; }
+  .sig button { font: inherit; font-size: 10px; font-weight: 700; background: var(--up); color: #04070c; border: 0; border-radius: 3px; padding: 4px 10px; cursor: pointer; }
+  .pill { font-size: 8px; font-weight: 700; padding: 2px 5px; border-radius: 2px; letter-spacing: .08em; }
+  .alert { border-radius: 5px; padding: 7px 10px; font-size: 10px; line-height: 1.5; cursor: pointer; border: 1px solid; }
+  .alert.urgent { border-color: var(--dn); background: var(--dn-dim); } .alert.good { border-color: var(--up); background: var(--up-dim); }
+  .alert.warn { border-color: #f5c451; background: rgba(245,196,81,.1); } .alert.info { border-color: #7cc4ff; background: rgba(124,196,255,.1); }
+  .alert b { letter-spacing: .08em; }
+  .disc { font-size: 9px; color: var(--dim); line-height: 1.5; margin: 2px 2px 6px; }
+  table.sc { width: 100%; font-size: 10px; border-collapse: collapse; } table.sc td { padding: 2px 3px; border-bottom: 1px solid var(--grid); }
+  .view { display: inline-flex; border: 1px solid var(--grid); border-radius: 4px; overflow: hidden; }
+  .view button { font: inherit; font-size: 10px; letter-spacing: .1em; padding: 4px 10px; background: transparent; color: var(--dim); border: 0; cursor: pointer; }
+  .view button.on { background: #7cc4ff; color: #04070c; font-weight: 700; }
+  .mbar { height: 6px; border-radius: 3px; background: var(--grid); overflow: hidden; margin: 4px 0; }
+  .mbar i { display: block; height: 100%; }
+  .hold { border: 1px solid var(--grid); border-radius: 5px; padding: 8px 10px; background: var(--panel); font-size: 10px; }
+  .hold .act { margin-top: 5px; padding: 4px 6px; border-radius: 3px; line-height: 1.5; }
+  .hold .act.urgent { background: var(--dn-dim); } .hold .act.good { background: var(--up-dim); }
+  .hold .act.warn { background: rgba(245,196,81,.12); } .hold .act.info { background: rgba(124,196,255,.12); } .hold .act.ok { color: var(--dim); }
+  .hold .act button { font: inherit; font-size: 9px; font-weight: 700; margin-left: 6px; background: #7cc4ff; border: 0; border-radius: 3px; padding: 2px 7px; cursor: pointer; }
+  .routine { font-size: 10px; color: var(--dim); line-height: 1.7; padding-left: 16px; margin: 4px 0; }
+  .econ details summary { font-size: 10px; color: var(--dim); cursor: pointer; margin-top: 4px; }
+</style>
+</head>
+<body>
+<header>
+  <div class="title">MARKET&nbsp;FLOW</div>
+  <div class="breadth"><span class="up">▲ <b id="adv">0</b></span>&nbsp;&nbsp;<span class="dn">▼ <b id="dec">0</b></span></div>
+  <span class="view"><button data-v="intraday" onclick="setView('intraday')">INTRADAY</button><button data-v="swing" onclick="setView('swing')">SWING</button></span>
+  <span class="mode paper" id="mode">PAPER</span>
+  <span id="phase"></span>
+  <span id="pnl"></span>
+  <span id="sq"></span>
+  <button class="hbtn" onclick="openOrder(null)">ORDERS</button>
+  <button class="hbtn kill" id="kill" onclick="toggleKill()">KILL SWITCH</button>
+  <div class="status"><span class="dot" id="dot"></span><span id="status">connecting…</span></div>
+</header>
+<div id="sectors"></div>
+<main>
+  <svg id="flow"></svg>
+  <div id="cards"></div>
+</main>
+
+<aside id="drawer">
+  <h2><span id="o-sym">—</span><button class="x" onclick="closeOrder()">×</button></h2>
+  <div class="note" id="o-ltp"></div>
+  <div id="o-range"></div>
+  <div id="o-form">
+    <div class="seg" id="o-segment">
+      <button data-v="cash" class="n">STOCK</button><button data-v="fut" class="n">FUTURES</button>
+    </div>
+    <div id="o-plan"></div>
+    <div class="seg" id="o-side"><button data-v="B" class="b">BUY</button><button data-v="S" class="s">SELL</button></div>
+    <div class="prod" id="o-prodbtns">
+      <button data-v="MIS"><b>INTRADAY</b><span id="o-mis-sub">buy &amp; sell today</span></button>
+      <button data-v="CNC"><b>DELIVERY</b><span>keep in demat · sell anytime</span></button>
+    </div>
+    <div class="fld" id="o-prodrow">Product <select id="o-product"></select></div>
+    <div class="fld"><span id="o-qtylbl">Qty (shares)</span>
+      <span class="step"><button onclick="bump('o-qty',-1)">−</button><input id="o-qty" type="number" min="1" value="1"><button onclick="bump('o-qty',1)">+</button></span></div>
+    <div class="fld">Limit price
+      <span class="step"><button onclick="bump('o-price',-0.05)">−</button><input id="o-price" type="number" step="0.05"><button onclick="bump('o-price',0.05)">+</button></span></div>
+    <div class="fld" id="o-avgrow">Your avg price <input id="o-avg" type="number" step="0.05" placeholder="optional"></div>
+    <div class="note" id="o-calc"></div>
+    <div id="o-econ"></div>
+    <button class="go review" onclick="review()">REVIEW ORDER</button>
+    <div id="o-review"></div>
+  </div>
+  <div class="label" style="margin-top:16px">POSITIONS (PAPER)</div><div id="o-pos" class="note">none</div>
+  <div class="label" style="margin-top:10px">ORDERS TODAY</div><div id="o-list" class="note">none</div>
+  <div class="note" id="o-limits" style="margin-top:12px"></div>
+</aside>
+
+<script>
+const UP = getComputedStyle(document.documentElement).getPropertyValue("--up").trim();
+const DN = getComputedStyle(document.documentElement).getPropertyValue("--dn").trim();
+const STOCK_MODE = () => !(last?.trading?.limits?.allow_fo);
+const SIG_SHORT = {"Near day high": "HIGH", "Near day low": "LOW", "Above VWAP": "▲VW", "Below VWAP": "▼VW", "—": ""};
+const PROD_NAME = { MIS: "Intraday", CNC: "Delivery", NRML: "Carry" };
+const BU_SHORT = {"Long Build-up":"LB","Short Build-up":"SB","Short Covering":"SC","Long Unwinding":"LU","Neutral":"—","No OI":"·"};
+const fmt = d3.format(",.2f");
+const sign = v => (v > 0 ? "+" : "") + v.toFixed(2) + "%";
+const col = v => v >= 0 ? UP : DN;
+
+const svg = d3.select("#flow");
+const gField = svg.append("g").attr("class", "field");   // faint intraday paths
+const gBar = svg.append("g").attr("class", "bar");
+const gLinks = svg.append("g").attr("class", "links");
+const gTiles = svg.append("g").attr("class", "tiles");
+
+// glow filter
+const defs = svg.append("defs");
+const glow = defs.append("filter").attr("id", "glow").attr("x", "-50%").attr("y", "-50%").attr("width", "200%").attr("height", "200%");
+glow.append("feGaussianBlur").attr("stdDeviation", 2.2).attr("result", "b");
+const m = glow.append("feMerge"); m.append("feMergeNode").attr("in", "b"); m.append("feMergeNode").attr("in", "SourceGraphic");
+
+function sparkPath(vals, w, h) {
+  if (!vals || vals.length < 2) return "";
+  const x = d3.scaleLinear().domain([0, vals.length - 1]).range([0, w]);
+  const y = d3.scaleLinear().domain(d3.extent(vals)).range([h, 0]).nice();
+  return d3.line().x((_, i) => x(i)).y(v => y(v)).curve(d3.curveMonotoneX)(vals);
+}
+
+function render(s) {
+  document.getElementById("adv").textContent = s.breadth.adv;
+  document.getElementById("dec").textContent = s.breadth.dec;
+  document.getElementById("status").textContent = `${s.mode.toUpperCase()} · ${s.status} · ${s.ts}`;
+  document.getElementById("dot").classList.toggle("live", s.status === "live");
+
+  // sector chips
+  d3.select("#sectors").selectAll(".chip").data(s.sectors, d => d.name)
+    .join("div").attr("class", "chip")
+    .style("color", d => col(d.pct)).style("border-color", d => col(d.pct))
+    .style("background", d => d.pct >= 0 ? "var(--up-dim)" : "var(--dn-dim)")
+    .text(d => `${d.name} ${sign(d.pct)}`);
+
+  const { width: W, height: H } = svg.node().getBoundingClientRect();
+  const stocks = s.stocks;
+  const gainers = stocks.filter(d => d.pct >= 0);
+  const losers = stocks.filter(d => d.pct < 0); // sorted desc → mildest near the split, weakest at bottom
+  const n = stocks.length || 1;
+
+  // --- layout ---
+  const pad = 12, fieldW = Math.max(80, W * 0.16), barX = fieldW + 20, barW = 14;
+  const tileX0 = barX + Math.max(120, W * 0.18);
+  const cols = Math.max(2, Math.floor((W - tileX0 - pad) / 118));
+  const tileW = (W - tileX0 - pad) / cols - 6;
+  const rowsUp = Math.ceil(gainers.length / cols), rowsDn = Math.ceil(losers.length / cols);
+  const gap = 18;
+  const tileH = Math.min(46, (H - 2 * pad - gap) / Math.max(1, rowsUp + rowsDn) - 5);
+  const splitY = pad + (H - 2 * pad) * (gainers.length / n);
+
+  stocks.forEach(d => {
+    const up = d.pct >= 0;
+    const idx = up ? gainers.indexOf(d) : losers.indexOf(d);
+    const r = Math.floor(idx / cols), c = idx % cols;
+    const yBase = up ? pad : pad + rowsUp * (tileH + 5) + gap;
+    d.tx = tileX0 + c * (tileW + 6);
+    d.ty = yBase + r * (tileH + 5);
+    // anchor on the breadth bar, spread inside green/red segment
+    d.ay = up ? pad + (splitY - pad) * ((idx + 0.5) / Math.max(1, gainers.length))
+              : splitY + (H - pad - splitY) * ((idx + 0.5) / Math.max(1, losers.length));
+  });
+
+  // --- field of intraday paths (left) ---
+  const allSpark = stocks.map(d => {
+    const v = d.spark || []; if (v.length < 2) return null;
+    const base = v[0]; return v.map(x => (x - base) / base * 100);
+  });
+  const ext = d3.extent(allSpark.flat().filter(v => v != null));
+  const fy = d3.scaleLinear().domain([Math.min(-1, ext[0] ?? -1), Math.max(1, ext[1] ?? 1)]).range([H - pad, pad]);
+  gField.selectAll("path").data(stocks, d => d.symbol).join("path")
+    .attr("fill", "none").attr("stroke-width", 0.8).attr("opacity", 0.35)
+    .attr("stroke", d => col(d.pct))
+    .attr("d", (d, i) => {
+      const v = allSpark[i]; if (!v) return "";
+      const x = d3.scaleLinear().domain([0, v.length - 1]).range([pad, fieldW]);
+      return d3.line().x((_, j) => x(j)).y(fy).curve(d3.curveBasis)(v);
+    });
+
+  // --- breadth bar ---
+  gBar.selectAll("rect.seg").data([
+    { y: pad, h: Math.max(0, splitY - pad), c: UP },
+    { y: splitY, h: Math.max(0, H - pad - splitY), c: DN },
+  ]).join(e => e.append("rect").attr("y", d => d.y).attr("height", d => d.h)).attr("class", "seg")
+    .attr("x", barX).attr("width", barW).attr("rx", 2)
+    .attr("fill", d => d.c).attr("opacity", 0.25).attr("stroke", d => d.c).attr("filter", "url(#glow)")
+    .transition().duration(600).attr("y", d => d.y).attr("height", d => d.h);
+  gBar.selectAll("text").data([
+    { y: pad + 14, t: s.breadth.adv, c: UP }, { y: H - pad - 6, t: s.breadth.dec, c: DN },
+  ]).join("text").attr("x", barX + barW + 6).attr("fill", d => d.c).attr("font-size", 16).attr("font-weight", 700)
+    .attr("y", d => d.y).text(d => d.t);
+
+  // --- flow links bar → tiles ---
+  const link = d3.linkHorizontal().x(p => p[0]).y(p => p[1]);
+  const linkD = d => link({ source: [barX + barW, d.ay], target: [d.tx, d.ty + tileH / 2] });
+  gLinks.selectAll("path").data(stocks, d => d.symbol).join(e => e.append("path").attr("d", linkD))
+    .attr("fill", "none").attr("stroke", d => col(d.pct))
+    .attr("stroke-width", d => 0.6 + Math.min(4, Math.abs(d.pct)))
+    .attr("opacity", d => 0.18 + Math.min(0.5, Math.abs(d.pct) / 6))
+    .transition().duration(600).attr("d", linkD);
+
+  // --- tiles ---
+  const tiles = gTiles.selectAll("g.tile").data(stocks, d => d.symbol).join(enter => {
+    const g = enter.append("g").attr("class", "tile").attr("transform", d => `translate(${d.tx},${d.ty})`);
+    g.append("rect").attr("rx", 3);
+    g.append("path").attr("class", "sp").attr("fill", "none").attr("stroke-width", 1);
+    g.append("text").attr("class", "tsym").attr("x", 6).attr("y", 13).attr("font-size", 10).attr("font-weight", 700);
+    g.append("text").attr("class", "tpct").attr("x", 6).attr("y", 26).attr("font-size", 10);
+    g.append("text").attr("class", "tbu").attr("text-anchor", "end").attr("y", 13).attr("font-size", 9);
+    return g;
+  });
+  tiles.on("click", (_, d) => openOrder(d.symbol));
+  tiles.transition().duration(600).attr("transform", d => `translate(${d.tx},${d.ty})`);
+  tiles.select("rect").attr("width", tileW).attr("height", tileH)
+    .attr("fill", d => d.pct >= 0 ? "#061612" : "#17080d")
+    .attr("stroke", d => col(d.pct)).attr("stroke-opacity", d => 0.35 + Math.min(0.65, Math.abs(d.pct) / 3));
+  tiles.select("text.tsym").attr("fill", "#e6f4fa").text(d => d.symbol);
+  tiles.select("text.tpct").attr("fill", d => col(d.pct)).text(d => sign(d.pct));
+  const buySet = new Set(VIEW === "swing" ? (s.swing?.setups || []).map(b => b.symbol)
+                                          : (s.signals?.buys || []).filter(b => b.status === "BUY").map(b => b.symbol));
+  tiles.select("rect").attr("stroke-width", d => buySet.has(d.symbol) ? 2.5 : 1).attr("filter", d => buySet.has(d.symbol) ? "url(#glow)" : null);
+  tiles.select("text.tbu").attr("x", tileW - 5).attr("fill", d => buySet.has(d.symbol) ? "#fff" : col(d.pct))
+    .attr("font-weight", d => buySet.has(d.symbol) ? 700 : 400)
+    .text(d => buySet.has(d.symbol) ? (VIEW === "swing" ? "SWING SETUP" : "BUY SETUP") : STOCK_MODE() ? (SIG_SHORT[d.signal] ?? "") : (BU_SHORT[d.buildup] ?? ""));
+  tiles.select("path.sp").attr("stroke", d => col(d.pct)).attr("opacity", 0.8)
+    .attr("transform", `translate(${tileW * 0.45},${Math.max(16, tileH - 18)})`)
+    .attr("d", d => tileH > 30 ? sparkPath(d.spark, tileW * 0.5, 14) : "");
+
+  renderCards(s);
+  renderTrading(s);
+}
+
+function rangeBar(d) {
+  if (d.day_low == null || d.day_high == null || d.day_high <= d.day_low) return "";
+  const vw = d.vwap != null ? Math.min(100, Math.max(0, (d.vwap - d.day_low) / (d.day_high - d.day_low) * 100)) : null;
+  return `<div class="range"><i style="left:calc(${d.range_pos}% - 1px)"></i>${vw != null ? `<u style="left:${vw}%" title="VWAP"></u>` : ""}</div>
+    <div class="rlbl"><span>L ${fmt(d.day_low)}</span><span style="color:#f5c451">${d.vwap != null ? "VWAP " + fmt(d.vwap) : ""}</span><span>H ${fmt(d.day_high)}</span></div>`;
+}
+
+function card(d) {
+  const up = d.pct >= 0, c = col(d.pct);
+  const pv = d.support != null || d.resistance != null
+    ? `S <span>${d.support != null ? fmt(d.support) : "—"}</span> · R <span>${d.resistance != null ? fmt(d.resistance) : "—"}</span>` : "pivots: n/a";
+  return `<div class="card ${up ? "up" : "dn"}" onclick="openOrder('${d.symbol}')">
+    <div class="row"><div><div class="sym">${d.symbol}</div><div class="sec">${d.sector}</div></div>
+      <div class="row" style="gap:8px"><span class="badge" style="background:${c}">${d.bias}</span>
+      <div class="score" style="border-color:${c};color:${c}">${d.score}</div></div></div>
+    <div class="pct" style="color:${c};text-shadow:0 0 12px ${c}">${sign(d.pct)}</div>
+    <div class="meta">₹<span>${fmt(d.ltp)}</span> (${d.chg >= 0 ? "+" : ""}${fmt(d.chg)}) ·
+      ${STOCK_MODE()
+        ? `<span style="color:${c}">${d.signal}</span>${d.vs_vwap != null ? ` · ${sign(d.vs_vwap)} vs VWAP` : ""}`
+        : `<span style="color:${c}">${d.buildup}</span>${d.oi_pct != null ? ` · OI ${sign(d.oi_pct)}` : ""}`}<br>
+      ${pv}${d.vol_ratio != null ? ` · Vol <span>${d.vol_ratio}x</span> usual` : ""}</div>
+    ${rangeBar(d)}
+    <svg viewBox="0 0 300 36" preserveAspectRatio="none"><path d="${sparkPath(d.spark, 300, 34)}" fill="none" stroke="${c}" stroke-width="1.5"/></svg>
+  </div>`;
+}
+
+// ===================================================================== view ==
+let VIEW = (() => { try { return localStorage.getItem("view") || "intraday"; } catch (e) { return "intraday"; } })();
+function setView(v) { VIEW = v; try { localStorage.setItem("view", v); } catch (e) {} if (last) render(last); }
+
+// ===================================================================== swing ==
+const SWINGS = {};
+function swingHTML(s) {
+  const w = s.swing; if (!w) return "";
+  w.setups.forEach(x => SWINGS[x.symbol] = x);
+  const m = w.month, used = m.pnl == null ? 0 : Math.min(100, m.used_pct);
+  let h = `<div class="label">SWING · ${w.final ? "end-of-day plan (final)" : "provisional — final after 15:30"}</div>
+    <div class="disc">Hold days to ~3 weeks · Delivery · risk ₹${tf(w.cfg.risk)}/trade · max ${w.cfg.max_positions} positions (${w.slots} free) ·
+      market <b style="color:${w.regime === "risk-on" ? UP : w.regime === "risk-off" ? DN : "#f5c451"}">${w.regime}</b> (${w.breadth50}% above 50-day avg).
+      Rule-based setups, not advice.</div>`;
+  if (!w.has_history) h += `<div class="disc" style="color:#f5c451">No daily history yet — run tools/fetch_bhavcopy.py and tools/build_daily.py.</div>`;
+  h += `<div class="label">MONTHLY LOSS LIMIT</div>` + (m.pnl == null ? `<div class="disc">${m.note}</div>` :
+    `<div class="disc">Month to date <b style="color:${col(m.pnl)}">${rs(m.pnl)}</b> of −₹${tf(m.limit)} limit${m.blocked ? ` · <b style="color:${DN}">NEW BUYS BLOCKED</b>` : ""}</div>
+     <div class="mbar"><i style="width:${used}%;background:${used > 75 ? DN : used > 40 ? "#f5c451" : UP}"></i></div>`);
+  if (w.holdings.length) h += `<div class="label">YOUR SWING HOLDINGS · tonight's actions</div>` + w.holdings.map(x => `
+    <div class="hold"><div class="row"><b style="font-size:12px;cursor:pointer" onclick="openOrder('${x.symbol}')">${x.symbol}</b>
+      <span>${x.qty} @ ₹${fmt(x.avg)} · day ${x.days_held}${x.r_now != null ? ` · <b style="color:${col(x.r_now)}">${x.r_now > 0 ? "+" : ""}${x.r_now}R</b>` : ""}</span></div>
+      ${x.plan ? `<div class="why">Stop ₹${fmt(x.plan.stop)} · Target ₹${fmt(x.plan.target)} · net if sold now <b style="color:${col(x.net_if_exit_now)}">${rs(x.net_if_exit_now)}</b></div>` : ""}
+      ${x.actions.map(a => `<div class="act ${a.level}"><b>${a.tag}</b> · ${a.msg}${a.new_stop ? `<button onclick="moveStop('${x.symbol}', ${a.new_stop})">APPLY</button>` : ""}</div>`).join("")}
+    </div>`).join("");
+  if (w.setups.length) h += `<div class="label">NEW SWING SETUPS · for the next session</div>` + w.setups.map(b => `
+    <div class="sig"><div class="row"><b>${b.symbol}</b>
+        <span class="pill" style="border:1px solid var(--grid)">${b.setup} · ${b.conf_label} ${b.score}</span></div>
+      <div class="lv"><div><span>BUY ≤</span>₹${fmt(b.entry)}</div><div><span>STOP</span><b style="color:${DN}">₹${fmt(b.stop)}</b></div><div><span>TARGET</span><b style="color:${UP}">₹${fmt(b.target)}</b></div></div>
+      <div class="row"><span class="why">${b.qty} sh · risk ₹${tf(b.risk_rupees)} · ₹${tf(b.value)} · exit by day ${b.time_stop_days}</span>
+        ${b.qty > 0 && w.slots > 0 && !m.blocked ? `<button onclick="tradeSwing('${b.symbol}')">PLAN TRADE</button>` : ""}</div>
+      <div class="why" style="margin-top:4px">${b.reasons.join(" · ")}</div></div>`).join("");
+  else h += `<div class="disc">No swing setups today — waiting is a position.</div>`;
+  h += `<div class="label">YOUR 10-MINUTE ROUTINE</div><ol class="routine">
+    <li>After 15:30: act on holdings (APPLY stop raises, exit STOP/TIME/TREND alerts)</li>
+    <li>Pick at most ${w.slots} new setup(s); PLAN TRADE queues a limit buy for the next session</li>
+    <li>Live: after the buy fills, place a GTT OCO (stop + target) in the Neo app</li>
+    <li>Sunday: review the month bar; if new buys are blocked, stop and review</li></ol>`;
+  return h;
+}
+function tradeSwing(sym) {
+  const x = SWINGS[sym]; if (!x) return;
+  openOrder(sym, { ...x, limit: x.entry, kind: "swing" });
+}
+async function moveStop(sym, stop) {
+  const r = await api("/api/positions/stop", { symbol: sym, product: "CNC", stop });
+  if (!r.ok) alertBox((r.errors || []).join(" "));
+}
+function alertBox(msg) { console.log(msg); }
+
+// ===================================================================== signals ==
+const SIGS = {};   // symbol -> latest buy signal (for the order panel)
+function signalsHTML(s) {
+  const g = s.signals; if (!g) return "";
+  g.buys.forEach(b => SIGS[b.symbol] = b);
+  let h = `<div class="label">SIGNALS · ${g.phase.label}</div><div class="disc">${g.phase.hint}. Market breadth: <b>${g.market}</b>.
+    Rule-based setups, not advice — the app does not place stop-losses for you.</div>`;
+  if (g.exits.length) h += `<div class="label">EXIT ALERTS · your positions</div>` + g.exits.map(a =>
+    `<div class="alert ${a.level}" onclick="openOrder('${a.symbol}')"><b>${a.tag}</b> · ${a.symbol} (${PROD_NAME[a.product] || a.product} ${a.qty})<br>${a.msg}
+     ${a.net_if_exit_now != null ? `<br>Net if you exit now: <b style="color:${col(a.net_if_exit_now)}">${rs(a.net_if_exit_now)}</b>` : ""}</div>`).join("");
+  const live = g.buys.filter(b => b.status === "BUY"), ext = g.buys.filter(b => b.status !== "BUY");
+  if (live.length) {
+    h += `<div class="label">BUY SETUPS · risk ₹${g.cfg.risk_per_trade} per trade · target ${g.cfg.target_r}R</div>` + live.map(b => `
+      <div class="sig ${b.status === "EXTENDED" ? "ext" : ""}">
+        <div class="row"><b>${b.symbol}</b>
+          <span><span class="pill" style="background:${b.status === "BUY" ? UP : "#f5c451"};color:#04070c">${b.status === "BUY" ? "BUY" : "EXTENDED · WAIT"}</span>
+          <span class="pill" style="border:1px solid var(--grid)">${b.setup} · ${b.conf_label} ${b.confidence}</span></span></div>
+        <div class="lv"><div><span>BUY ≤</span>₹${fmt(b.limit)}</div><div><span>STOP</span><b style="color:${DN}">₹${fmt(b.stop)}</b></div><div><span>TARGET</span><b style="color:${UP}">₹${fmt(b.target)}</b></div></div>
+        <div class="row"><span class="why">${b.qty} sh · risk ₹${fmt(b.risk_rupees)} · ₹${tf(b.value)} <span title="what limited the quantity">(${b.limited_by})</span></span>
+          ${b.status === "BUY" && b.qty > 0 ? `<button onclick="tradeSignal('${b.symbol}')">TRADE</button>` : ""}</div>
+        <div class="why" style="margin-top:4px">${b.status === "EXTENDED" ? "Already ran past the entry — don't chase; wait for a pullback to ₹" + fmt(b.entry) + ". " : ""}${b.reasons.join(" · ")}</div>
+      </div>`).join("");
+  } else if (g.phase.entries) h += `<div class="disc">No fresh setups right now — no trade is a valid position.</div>`;
+  if (ext.length) h += `<div class="label">WATCH · ran past entry, don't chase</div><div class="disc">` +
+    ext.map(b => `<b style="color:#f5c451;cursor:pointer" onclick="openOrder('${b.symbol}')">${b.symbol}</b> wait for a dip to ≈₹${fmt(b.entry)} (stop ₹${fmt(b.stop)})`).join("<br>") + `</div>`;
+  if (g.avoid.length) h += `<div class="label">AVOID BUYING</div><div class="disc">` + g.avoid.map(a => `<b style="color:${DN}">${a.symbol}</b> ${a.why}`).join("<br>") + `</div>`;
+  const st = Object.entries(g.stats);
+  if (st.length) h += `<div class="label">TODAY'S SCORECARD · how the signals played out</div><table class="sc">
+      <tr style="color:var(--dim)"><td>Setup</td><td>Signals</td><td>Target</td><td>Stop</td><td>Time</td><td>Open</td><td>Net R</td></tr>` +
+    st.map(([k, v]) => `<tr><td>${k}</td><td>${v.signals}</td><td style="color:${UP}">${v.target}</td><td style="color:${DN}">${v.stop}</td><td>${v.time}</td><td>${v.open}</td><td style="color:${col(v.r_total)}">${v.r_total > 0 ? "+" : ""}${v.r_total}R</td></tr>`).join("") +
+    `</table><div class="disc">1R = the risk you planned. Judge a setup over weeks of paper trading, not one day.</div>`;
+  return h;
+}
+function tradeSignal(sym) { openOrder(sym, SIGS[sym]); }
+
+function renderCards(s) {
+  const top = s.stocks.filter(d => d.pct > 0).slice(0, 3);
+  const bot = s.stocks.filter(d => d.pct < 0).slice(-3).reverse();
+  document.querySelectorAll(".view button").forEach(b => b.classList.toggle("on", b.dataset.v === VIEW));
+  const g0 = s.signals; if (g0) { const ph = $("phase"); ph.className = g0.phase.key; ph.textContent = g0.phase.label.toUpperCase(); ph.title = g0.phase.hint; }
+  document.getElementById("cards").innerHTML = (VIEW === "swing" ? swingHTML(s) : signalsHTML(s)) +
+    `<div class="label">TOP GAINERS</div>${top.map(card).join("")}<div class="label">TOP LOSERS</div>${bot.map(card).join("")}`;
+}
+
+// ===================================================================== orders ==
+const O = { sym: null, segment: "cash", side: "B", ticket: null, timer: null };
+const $ = id => document.getElementById(id);
+const tf = d3.format(",.0f");
+
+async function api(path, body) {
+  const headers = { "Content-Type": "application/json" };
+  const tok = sessionStorage.getItem("orderToken"); if (tok) headers["X-Order-Token"] = tok;
+  let r = await fetch(path, { method: "POST", headers, body: JSON.stringify(body) });
+  if (r.status === 401) {
+    const t = prompt("Order API token (ORDER_API_TOKEN from .env):");
+    if (!t) throw new Error("token required");
+    sessionStorage.setItem("orderToken", t);
+    return api(path, body);
+  }
+  return r.json();
+}
+
+function stockOf(sym) { return last?.stocks.find(d => d.symbol === sym); }
+
+function openOrder(sym, plan) {
+  $("drawer").classList.add("open");
+  $("o-form").style.display = sym ? "" : "none";
+  if (!sym) { $("o-sym").textContent = "Orders & positions"; $("o-ltp").textContent = ""; return; }
+  O.sym = sym; O.segment = "cash"; O.side = "B"; $("o-avg").value = "";
+  O.plan = plan || null;
+  // already holding it? default to the exit side and the position's product/qty
+  const pos = (last?.trading?.positions || []).find(p => p.symbol === sym && p.qty);
+  if (pos) { O.segment = pos.segment; O.side = pos.qty > 0 ? "S" : "B"; }
+  const d = stockOf(sym);
+  $("o-sym").textContent = sym;
+  const ref = O.segment === "fut" ? d?.fut_ltp : d?.ltp;
+  $("o-qty").value = pos ? Math.abs(pos.qty) / (O.segment === "fut" ? (d?.lot_size || 1) : 1) : 1;
+  $("o-price").value = ref ? (Math.round(ref / 0.05) * 0.05).toFixed(2) : "";
+  $("o-product").innerHTML = '<option value="MIS">MIS</option><option value="CNC">CNC</option>';
+  $("o-product").value = pos ? pos.product : (localStorage.getItem("lastProduct") || "MIS");
+  if (O.plan) {                      // pre-fill from the signal: buy at the limit, sized to your risk
+    O.side = "B"; $("o-product").value = O.plan.kind === "swing" ? "CNC" : "MIS";
+    $("o-qty").value = O.plan.qty; $("o-price").value = O.plan.limit.toFixed(2);
+  }
+  syncForm(); calc(); clearReview(); renderPlan();
+}
+
+function renderPlan() {
+  const pos = (last?.trading?.positions || []).find(p => p.symbol === O.sym && p.qty && p.plan);
+  const p = O.plan || pos?.plan;
+  if (!p) { $("o-plan").innerHTML = ""; return; }
+  const entry = O.plan ? O.plan.limit : p.entry, risk = entry - p.stop, rr = risk > 0 ? ((p.target - entry) / risk).toFixed(1) : "—";
+  const q = parseInt($("o-qty").value) || 0;
+  $("o-plan").innerHTML = `<div class="econ" style="border-color:${UP}">
+    <div class="t">${O.plan ? "SIGNAL PLAN" : "YOUR PLAN"} · ${p.setup || O.plan?.setup || ""}</div>
+    <div class="lv" style="display:grid;grid-template-columns:repeat(3,1fr);gap:4px;margin:6px 0;font-size:11px">
+      <div>Entry<br><b>₹${fmt(entry)}</b></div><div>Stop<br><b style="color:${DN}">₹${fmt(p.stop)}</b></div><div>Target<br><b style="color:${UP}">₹${fmt(p.target)}</b></div></div>
+    <div class="note" style="margin:0">Reward : risk 1 : ${rr}${O.plan ? ` · planned loss if stopped ≈ ₹${fmt(q * risk)} + charges` : ""}<br>
+    ${(p.kind || O.plan?.kind) === "swing"
+      ? `Swing: paper mode exits automatically at stop/target (simulated GTT). Live: after the buy fills, place a <b>GTT OCO</b> with these levels in the Neo app. Exit by day ${O.plan?.time_stop_days ?? 15} if the target isn't hit.`
+      : `The stop-loss is <b>not</b> sent to Kotak — the app alerts you and you exit manually.`}${O.plan ? "<br>" + O.plan.reasons.join(" · ") : ""}</div></div>`;
+}
+function closeOrder() { $("drawer").classList.remove("open"); clearReview(); }
+
+function syncForm() {
+  const d = stockOf(O.sym), lim = last?.trading?.limits || {};
+  document.querySelectorAll("#o-segment button").forEach(b => {
+    b.classList.toggle("on", b.dataset.v === O.segment);
+    if (b.dataset.v === "fut") b.disabled = !lim.allow_fo || !d?.lot_size;
+  });
+  document.querySelectorAll("#o-side button").forEach(b => b.classList.toggle("on", b.dataset.v === O.side));
+  const stockOnly = STOCK_MODE();
+  $("o-segment").style.display = stockOnly ? "none" : "";
+  if (stockOnly) O.segment = "cash";
+  $("o-prodbtns").style.display = O.segment === "cash" ? "" : "none";
+  $("o-prodrow").style.display = O.segment === "cash" ? "none" : "";
+  const t = last?.trading; $("o-mis-sub").textContent = `buy & sell today · auto-exit ${t?.squareoff_time ?? "15:15"}`;
+  const prods = O.segment === "cash" ? [["CNC", "CNC · delivery"], ["MIS", "MIS · intraday"]] : [["NRML", "NRML · carry"], ["MIS", "MIS · intraday"]];
+  const cur = $("o-product").value;
+  $("o-product").innerHTML = prods.map(([v, t]) => `<option value="${v}">${t}</option>`).join("");
+  if (prods.some(p => p[0] === cur)) $("o-product").value = cur;
+  document.querySelectorAll("#o-prodbtns button").forEach(b => b.classList.toggle("on", b.dataset.v === $("o-product").value));
+  const hasPos = (last?.trading?.positions || []).some(p => p.symbol === O.sym && p.segment === O.segment && p.qty);
+  $("o-avgrow").style.display = (last?.trading?.mode === "live" || !hasPos) ? "" : "none";
+  $("o-qtylbl").textContent = O.segment === "cash" ? `Qty (shares, max ${(O.plan?.kind === "swing" ? lim.max_qty_cash_swing : lim.max_qty_cash) ?? "?"})` : `Lots (×${d?.lot_size ?? "?"}, max ${lim.max_lots_fo ?? "?"})`;
+  calc();
+}
+document.querySelectorAll("#o-segment button").forEach(b => b.onclick = () => {
+  O.segment = b.dataset.v; const d = stockOf(O.sym);
+  const px = O.segment === "fut" ? d?.fut_ltp : d?.ltp; if (px) $("o-price").value = (Math.round(px / 0.05) * 0.05).toFixed(2);
+  syncForm(); clearReview();
+});
+document.querySelectorAll("#o-side button").forEach(b => b.onclick = () => { O.side = b.dataset.v; syncForm(); clearReview(); });
+document.querySelectorAll("#o-prodbtns button").forEach(b => b.onclick = () => {
+  $("o-product").value = b.dataset.v; try { localStorage.setItem("lastProduct", b.dataset.v); } catch (e) {}
+  syncForm(); clearReview();
+});
+["o-qty", "o-price", "o-product", "o-avg"].forEach(id => $(id).addEventListener("input", () => { calc(); clearReview(); renderPlan(); }));
+
+function bump(id, step) {
+  const el = $(id); const v = (parseFloat(el.value) || 0) + step;
+  el.value = id === "o-qty" ? Math.max(1, Math.round(v)) : Math.max(0.05, v).toFixed(2);
+  calc(); clearReview();
+}
+function calc() {
+  const d = stockOf(O.sym), lim = last?.trading?.limits || {};
+  const q = parseInt($("o-qty").value) || 0, px = parseFloat($("o-price").value) || 0;
+  const units = O.segment === "fut" ? q * (d?.lot_size || 0) : q;
+  const isSwing = O.plan?.kind === "swing" && $("o-product").value === "CNC";
+  const cap = O.segment === "fut" ? lim.max_value_fo : isSwing ? lim.max_value_swing : lim.max_value_cash;
+  const ref = O.segment === "fut" ? d?.fut_ltp : d?.ltp;
+  const dev = ref ? ((px - ref) / ref * 100) : null;
+  $("o-calc").innerHTML = `Value <b style="color:var(--text)">₹${tf(px * units)}</b> (cap ₹${tf(cap || 0)}) · ${units} units` +
+    (dev != null ? ` · ${dev >= 0 ? "+" : ""}${dev.toFixed(2)}% vs LTP (band ±${lim.price_band_pct}%)` : "");
+  scheduleEstimate();
+}
+
+// ---- live P&L estimate (net of all charges) ----
+let estTimer = null, estBusy = false;
+function orderBody() {
+  const b = { symbol: O.sym, segment: O.segment, side: O.side, product: $("o-product").value,
+              qty: parseInt($("o-qty").value), price: parseFloat($("o-price").value) };
+  const avg = parseFloat($("o-avg").value); if (avg > 0) b.avg_price = avg;
+  if (O.plan && O.side === "B") b.plan = { entry: parseFloat($("o-price").value), stop: O.plan.stop, target: O.plan.target, setup: O.plan.setup, kind: O.plan.kind || "intraday" };
+  const held = (last?.trading?.positions || []).find(p => p.symbol === O.sym && p.qty && p.product === b.product);
+  if (b.product === "CNC" && ((O.plan && O.plan.kind === "swing") || held?.plan?.kind === "swing")) b.strategy = "swing";
+  return b;
+}
+function scheduleEstimate() { clearTimeout(estTimer); estTimer = setTimeout(estimate, 200); }
+async function estimate() {
+  if (!O.sym || estBusy || !$("drawer").classList.contains("open")) return;
+  estBusy = true;
+  try {
+    const r = await (await fetch("/api/orders/estimate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(orderBody()) })).json();
+    $("o-econ").innerHTML = econHTML(r.economics);
+  } finally { estBusy = false; }
+}
+const rs = v => `${v < 0 ? "−" : ""}₹${fmt(Math.abs(v))}`;
+function chargeRows(c) {
+  const names = { brokerage: "Brokerage", stt: "STT", exchange: "Exchange txn", sebi: "SEBI fee", stamp: "Stamp duty", dp: "DP charge", gst: "GST 18%" };
+  return Object.entries(names).filter(([k]) => c[k] > 0).map(([k, n]) => `<tr><td>${n}</td><td>₹${fmt(c[k])}</td></tr>`).join("");
+}
+function econHTML(e) {
+  if (!e) return "";
+  let h = "";
+  if (e.close) {
+    const c = e.close, verb = O.side === "S" ? "SELL" : "BUY BACK", nc = col(c.net);
+    h += `<div class="econ" style="border-color:${nc}">
+      <div class="t">IF YOU ${verb} ${c.qty} NOW @ ₹${fmt(c.exit)} · avg ₹${fmt(c.avg)} (${c.source})</div>
+      <div class="big" style="color:${nc}">${c.net >= 0 ? "PROFIT " : "LOSS "}${rs(c.net)}</div>
+      <div class="note" style="margin:0">net after charges · ${rs(c.per_share)}/share · gross ${rs(c.gross)} − charges ₹${fmt(c.charges.total)}</div>
+      ${c.same_day_delivery ? `<div class="note" style="margin:2px 0 0;color:#f5c451">Bought today → selling today counts as intraday (lower STT, no DP charge)</div>` : ""}
+      <details><summary>charges breakdown</summary><table>${chargeRows(c.charges)}<tr><td><b>Total</b></td><td><b>₹${fmt(c.charges.total)}</b></td></tr></table></details>
+    </div>`;
+  }
+  if (e.open) {
+    const o = e.open, dir = O.side === "B" ? "rise" : "fall";
+    h += `<div class="econ"><div class="t">NEW POSITION · ${o.qty} @ ₹${fmt(o.entry)} · ${o.kind.toUpperCase()}</div>
+      <div class="note" style="margin:4px 0 0">${o.breakeven_same_day != null
+        ? `Breakeven if you <b>sell today</b>: <b style="color:var(--text)">₹${fmt(o.breakeven_same_day)}</b><br>Breakeven if you <b>hold overnight</b>: <b style="color:var(--text)">₹${fmt(o.breakeven)}</b> (delivery STT + brokerage + DP)`
+        : `Breakeven exit <b style="color:var(--text)">₹${fmt(o.breakeven)}</b> — price must ${dir} ₹${fmt(o.move_needed)}/share to cover ~₹${fmt(o.round_trip_charges)} charges`}</div></div>`;
+  }
+  return h;
+}
+function clearReview() { O.ticket = null; clearInterval(O.timer); $("o-review").innerHTML = ""; }
+
+async function review() {
+  clearReview();
+  const r = await api("/api/orders/preview", orderBody());
+  const o = r.order || {};
+  let html = (r.errors || []).map(e => `<div class="msg err">✕ ${e}</div>`).join("") +
+             (r.warnings || []).map(w => `<div class="msg warn">! ${w}</div>`).join("");
+  if (r.ok) {
+    O.ticket = r.ticket;
+    const verb = o.side === "B" ? "BUY" : "SELL";
+    html += `<div class="msg ok">${r.mode.toUpperCase()} · ${verb} ${o.quantity} × ${o.trading_symbol} @ ₹${o.price.toFixed(2)} LIMIT · ${o.product} · ₹${tf(o.value)}</div>
+      <button class="go ${o.side === "B" ? "b" : "s"}" id="o-confirm" onclick="confirmOrder()">CONFIRM ${verb} <span id="o-ttl">${r.ttl}</span>s</button>`;
+    let t = r.ttl;
+    O.timer = setInterval(() => { t--; const el = $("o-ttl"); if (el) el.textContent = t; if (t <= 0) { clearReview(); $("o-review").innerHTML = `<div class="msg warn">Preview expired — review again</div>`; } }, 1000);
+  }
+  $("o-review").innerHTML = html;
+}
+async function confirmOrder() {
+  const btn = $("o-confirm"); if (btn) btn.disabled = true;
+  const r = await api("/api/orders/confirm", { ticket: O.ticket });
+  clearInterval(O.timer); O.ticket = null;
+  $("o-review").innerHTML = r.ok
+    ? `<div class="msg ok">✓ ${r.order.status} · id ${r.order.id}</div>`
+    : (r.errors || []).map(e => `<div class="msg err">✕ ${e}</div>`).join("") + (r.order?.broker ? `<div class="msg err">${JSON.stringify(r.order.broker)}</div>` : "");
+}
+async function cancelPaper(id) { await api("/api/orders/cancel", { id }); }
+async function toggleKill() {
+  const on = !(last?.trading?.killed);
+  if (on || confirm("Turn the kill switch OFF and allow trading again?")) await api("/api/kill", { on });
+}
+
+function renderTrading(s) {
+  const t = s.trading; if (!t) return;
+  const m = $("mode"); m.textContent = t.mode.toUpperCase(); m.className = "mode " + t.mode;
+  const k = $("kill"); k.classList.toggle("on", t.killed); k.textContent = t.killed ? "TRADING HALTED" : "KILL SWITCH";
+  $("pnl").innerHTML = t.mode === "paper" && t.positions.length
+    ? `NET P&L <b style="color:${col(t.pnl_net)}">${rs(t.pnl_net)}</b> <span style="color:var(--dim);font-size:10px">(gross ${rs(t.pnl)})</span>` : "";
+  const L = t.limits;
+  $("o-limits").innerHTML = `Limits · ${L.max_qty_cash} sh / ₹${tf(L.max_value_cash)} per stock order · futures ${L.allow_fo ? `${L.max_lots_fo} lot / ₹${tf(L.max_value_fo)}` : "OFF"} · ${t.orders_today}/${L.max_orders_day} orders today · limit orders only, ±${L.price_band_pct}% of LTP`;
+  $("o-pos").innerHTML = t.positions.length ? `<table class="ol">${t.positions.map(p =>
+    `<tr style="cursor:pointer" onclick="openOrder('${p.symbol}')"><td>${p.symbol}${p.segment === "fut" ? " FUT" : ""}${p.held_overnight ? '<span class="tag">HELD</span>' : ""}</td><td>${PROD_NAME[p.product] || p.product}</td><td>${p.qty}</td><td>@${fmt(p.avg)}</td>
+      <td title="gross">${rs(p.unrealised + p.realised)}</td><td style="color:${col(p.net_if_exit_now)};font-weight:700" title="net if you exit now, after all charges">${rs(p.net_if_exit_now)}</td></tr>`).join("")}</table>
+      <div class="note" style="margin-top:2px">columns: gross · <b>net if you exit now</b> (after brokerage, STT, fees, GST) — tap a row to exit</div>` : "none";
+  const misOpen = t.positions.some(p => p.product === "MIS" && p.qty);
+  const m2 = t.minutes_to_squareoff;
+  $("sq").textContent = m2 != null && misOpen ? `Intraday auto-exit in ${Math.floor(m2 / 60)}h ${m2 % 60}m` : "";
+  $("o-list").innerHTML = t.orders.length ? `<table class="ol">${t.orders.map(o =>
+    `<tr><td>${o.time}</td><td style="color:${o.side === "B" ? UP : DN}">${o.side === "B" ? "BUY" : "SELL"}</td><td>${o.symbol}</td><td>${o.quantity}@${fmt(o.fill_price ?? o.price)}</td><td>${o.auto ? (o.auto_reason || "AUTO-EXIT") : o.status.replace("PAPER_", "") + (o.status === "PAPER_OPEN" && o.date > (last?.date || "") ? " (next session)" : "")}</td>
+     <td>${o.status === "PAPER_OPEN" ? `<a onclick="cancelPaper('${o.id}')">cancel</a>` : ""}</td></tr>`).join("")}</table>` : "none";
+  if (O.sym && $("drawer").classList.contains("open") && $("o-form").style.display !== "none") estimate();
+  if (O.sym && $("drawer").classList.contains("open")) {
+    const d = stockOf(O.sym);
+    if (d) {
+      $("o-ltp").innerHTML = `LTP ₹${fmt(d.ltp)} <span style="color:${col(d.pct)}">${sign(d.pct)}</span> · ` +
+        (STOCK_MODE() ? `${d.signal}${d.vol_ratio != null ? ` · Vol ${d.vol_ratio}x usual` : ""}`
+                      : `${d.fut_ltp ? `FUT ₹${fmt(d.fut_ltp)} · ` : ""}${d.buildup}`);
+      $("o-range").innerHTML = rangeBar(d);
+    }
+  }
+}
+
+// --- websocket with auto-reconnect ---
+let last = null;
+function connect() {
+  const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`);
+  ws.onmessage = e => {
+    const first = !last; last = JSON.parse(e.data);
+    if (first && /view=swing/.test(location.hash)) VIEW = "swing";       // deep link: /#view=swing
+    render(last);
+    const m = first && location.hash.match(/order=([A-Z0-9&-]+)/);   // deep link: /#order=TCS
+    if (m) openOrder(decodeURIComponent(m[1]));
+    const t = first && location.hash.match(/trade=([A-Z0-9&-]+)/);  // deep link: /#trade=TCS (from its signal)
+    if (t && SIGS[t[1]]) tradeSignal(t[1]);
+  };
+  ws.onclose = () => { document.getElementById("status").textContent = "disconnected — retrying"; setTimeout(connect, 2000); };
+  setInterval(() => ws.readyState === 1 && ws.send("ping"), 20000);
+}
+window.addEventListener("resize", () => last && render(last));
+connect();
+</script>
+</body>
+</html>
